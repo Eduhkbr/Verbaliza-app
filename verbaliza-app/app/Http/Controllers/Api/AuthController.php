@@ -5,7 +5,6 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 
@@ -20,7 +19,7 @@ class AuthController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8',
+            'password' => 'required|string|min:8|confirmed',
         ]);
 
         if ($validator->fails()) {
@@ -34,11 +33,10 @@ class AuthController extends Controller
             'password' => Hash::make($request->password),
         ]);
 
-        // Retorna uma resposta de sucesso
-        return response()->json([
-            'message' => 'Utilizador registado com sucesso!',
-            'user' => $user
-        ], 201);
+
+        $user->sendEmailVerificationNotification();
+
+        return response()->json(['message' => 'Registo bem-sucedido. Por favor, verifique o seu e-mail.'], 201);
     }
 
     /**
@@ -46,33 +44,35 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
-        // Validação dos dados de entrada
-        $validator = Validator::make($request->all(), [
+        $request->validate([
             'email' => 'required|email',
-            'password' => 'required|string',
+            'password' => 'required',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json($validator->errors(), 422);
+        // 1. Encontrar o utilizador pelo e-mail
+        $user = User::where('email', $request->email)->first();
+
+        // 2. Verificar se o utilizador existe E se a senha está correta
+        if (! $user || ! Hash::check($request->password, $user->password)) {
+            return response()->json(['message' => 'Credenciais inválidas.'], 401);
         }
 
-        // Tenta autenticar o utilizador
-        if (!Auth::attempt($request->only('email', 'password'))) {
-            return response()->json(['message' => 'Credenciais inválidas'], 401);
+        // 3. Verificar se o e-mail do utilizador foi verificado
+        if (! $user->hasVerifiedEmail()) {
+            return response()->json([
+                'message' => 'O seu endereço de e-mail não foi verificado.',
+                'email_not_verified' => true
+            ], 403); // 403 Forbidden é mais apropriado aqui
         }
 
-        // Obtém o utilizador autenticado
-        $user = User::where('email', $request['email'])->firstOrFail();
-
-        // Cria um token de acesso
+        // 4. Se tudo estiver correto, criar e retornar o token
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // Retorna o utilizador e o token
         return response()->json([
             'message' => 'Login bem-sucedido!',
-            'user' => $user,
             'access_token' => $token,
             'token_type' => 'Bearer',
+            'user' => $user,
         ]);
     }
 
